@@ -54,7 +54,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEEPSEEK_MODEL = "deepseek/deepseek-r1-0528:free"
 
 # Application Configuration
-APP_VERSION = "2.1-ENHANCED-SECURE"
+APP_VERSION = "2.2-MULTI-FILE"
 APP_NAME = "PowerPoint Slide Assembler"
 DEBUG_MODE = True  # Set to True for detailed debugging output
 
@@ -1072,7 +1072,7 @@ def render_header():
     )
     
     st.title(f"📊 {APP_NAME}")
-    st.caption(f"Version {APP_VERSION} - Template Duplication + AI Analysis")
+    st.caption(f"Version {APP_VERSION} - Individual File Assembly + AI Analysis")
     
     # Header information
     col1, col2, col3 = st.columns(3)
@@ -1749,6 +1749,11 @@ def render_slide_assembly():
         **Result**: You'll get separate `.pptx` files that you can manually combine in PowerPoint if needed.
         """)
     
+    # Show existing results first (persistent download section)
+    if st.session_state.processing_results:
+        render_download_section()
+        st.divider()
+    
     st.markdown("**Assembly Configuration**")
     
     # File and slide selection
@@ -1790,7 +1795,7 @@ def render_slide_assembly():
         
         st.divider()
     
-    # Assembly button
+    # Assembly button and processing
     if assembly_configs:
         total_slides = sum(len(config["parsed_slides"]) for config in assembly_configs)
         num_files = len(assembly_configs)
@@ -1800,7 +1805,21 @@ def render_slide_assembly():
         else:
             st.info(f"📊 Ready to assemble: {total_slides} slides from {num_files} files → **{num_files} individual output files**")
         
-        if st.button("🚀 Create Assembled Presentation(s)", type="primary"):
+        # Clear previous results button
+        if st.session_state.processing_results:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                create_button = st.button("🚀 Create New Assembled Presentation(s)", type="primary")
+            with col2:
+                if st.button("🗑️ Clear Previous Results"):
+                    st.session_state.processing_results = {}
+                    st.rerun()
+        else:
+            create_button = st.button("🚀 Create Assembled Presentation(s)", type="primary")
+        
+        if create_button:
+            # Clear any previous results before starting new processing
+            st.session_state.processing_results = {}
             
             with st.spinner("🔄 Creating assembled presentations using template duplication..."):
                 
@@ -1837,90 +1856,130 @@ def render_slide_assembly():
                 
                 processing_result = create_individual_template_files(template_results, output_dir)
                 
+                # Store results in session state IMMEDIATELY
+                st.session_state.processing_results = {
+                    "template_results": template_results,
+                    "processing_result": processing_result,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "assembly_configs": assembly_configs  # Store configs for reference
+                }
+                
                 if processing_result["success"]:
                     st.success(f"🎉 **Assembly completed successfully!**")
-                    
-                    # Display overall results
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Files Created", len([f for f in processing_result["individual_files"] if f["processing_successful"]]))
-                    with col2:
-                        st.metric("Total Slides", processing_result["total_slides"])
-                    with col3:
-                        st.metric("Processing Time", f"{processing_result['processing_time']:.1f}s")
-                    
-                    # Display individual file results and download buttons
-                    st.subheader("📥 Download Your Assembled Presentations")
-                    
-                    successful_files = [f for f in processing_result["individual_files"] if f["processing_successful"]]
-                    
-                    if successful_files:
-                        for i, file_info in enumerate(successful_files):
-                            with st.container():
-                                st.markdown(f"### 📄 {file_info['original_name']}")
-                                
-                                col1, col2, col3 = st.columns([2, 1, 1])
-                                
-                                with col1:
-                                    st.markdown(f"**Output:** `{file_info['final_filename']}`")
-                                    st.caption(f"Slides included: {', '.join(map(str, file_info['slides_kept']))}")
-                                
-                                with col2:
-                                    st.metric("Slides", file_info['slide_count'])
-                                    st.metric("Size", f"{file_info['file_size_mb']:.1f} MB")
-                                
-                                with col3:
-                                    # Download button for this file
-                                    file_path = Path(file_info['file_path'])
-                                    if file_path.exists():
-                                        with open(file_path, "rb") as file:
-                                            st.download_button(
-                                                label=f"📥 Download",
-                                                data=file.read(),
-                                                file_name=file_info['final_filename'],
-                                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                                type="primary",
-                                                key=f"download_{i}",
-                                                use_container_width=True
-                                            )
-                                        
-                                        st.caption(f"📁 Saved: `{file_path.absolute()}`")
-                                
-                                if i < len(successful_files) - 1:
-                                    st.divider()
-                        
-                        # Summary message
-                        if len(successful_files) > 1:
-                            st.info(f"""
-                            **📋 Multiple Files Created**: You now have {len(successful_files)} individual presentation files.
-                            
-                            **To combine them manually:**
-                            1. Open the first presentation in PowerPoint
-                            2. Use "Insert → Slides from Other Presentation" to add slides from other files
-                            3. Arrange slides as needed
-                            
-                            **Why separate files?** This preserves all formatting, themes, and layouts perfectly.
-                            """)
-                    
-                    # Show failed files if any
-                    failed_files = [f for f in processing_result["individual_files"] if not f["processing_successful"]]
-                    if failed_files:
-                        st.error("❌ **Some files failed to process:**")
-                        for file_info in failed_files:
-                            st.error(f"• {file_info['original_name']}: {file_info.get('error', 'Unknown error')}")
-                    
-                    # Store results
-                    st.session_state.processing_results = {
-                        "template_results": template_results,
-                        "processing_result": processing_result,
-                        "timestamp": datetime.datetime.now().isoformat()
-                    }
+                    st.info("📥 **Download section created below** - scroll down to see your files!")
+                    st.rerun()  # Refresh to show persistent download section
                     
                 else:
                     st.error(f"❌ Assembly failed: {processing_result.get('error', 'Unknown error')}")
     else:
         st.info("👆 Configure slide ranges for your files to enable assembly.")
+
+
+def render_download_section():
+    """Render persistent download section that doesn't disappear after downloads."""
+    
+    if not st.session_state.processing_results:
+        return
+    
+    processing_result = st.session_state.processing_results.get("processing_result", {})
+    
+    if not processing_result.get("success"):
+        return
+    
+    st.subheader("📥 Your Assembled Presentations")
+    
+    # Display overall results
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        successful_files = len([f for f in processing_result["individual_files"] if f["processing_successful"]])
+        st.metric("Files Created", successful_files)
+    with col2:
+        st.metric("Total Slides", processing_result["total_slides"])
+    with col3:
+        st.metric("Processing Time", f"{processing_result['processing_time']:.1f}s")
+    
+    # Show timestamp
+    timestamp = st.session_state.processing_results.get("timestamp", "")
+    if timestamp:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(timestamp)
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            st.caption(f"Created: {formatted_time}")
+        except:
+            st.caption(f"Created: {timestamp}")
+    
+    st.markdown("---")
+    
+    # Display individual file results and download buttons
+    successful_files = [f for f in processing_result["individual_files"] if f["processing_successful"]]
+    
+    if successful_files:
+        for i, file_info in enumerate(successful_files):
+            with st.container():
+                st.markdown(f"### 📄 {file_info['original_name']}")
+                
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    st.markdown(f"**Output:** `{file_info['final_filename']}`")
+                    st.caption(f"Slides included: {', '.join(map(str, file_info['slides_kept']))}")
+                
+                with col2:
+                    st.metric("Slides", file_info['slide_count'])
+                    st.metric("Size", f"{file_info['file_size_mb']:.1f} MB")
+                
+                with col3:
+                    # Download button for this file - using unique keys based on filename
+                    file_path = Path(file_info['file_path'])
+                    if file_path.exists():
+                        try:
+                            with open(file_path, "rb") as file:
+                                file_data = file.read()
+                                
+                            # Use filename-based key to ensure uniqueness and persistence
+                            download_key = f"download_{file_info['final_filename']}_{i}"
+                            
+                            st.download_button(
+                                label=f"📥 Download",
+                                data=file_data,
+                                file_name=file_info['final_filename'],
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                type="primary",
+                                key=download_key,
+                                use_container_width=True
+                            )
+                            
+                            st.caption(f"📁 `{file_path.name}`")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error reading file: {str(e)}")
+                    else:
+                        st.error("❌ File not found")
+                
+                if i < len(successful_files) - 1:
+                    st.divider()
+        
+        # Summary message for multiple files
+        if len(successful_files) > 1:
+            st.info(f"""
+            **📋 Multiple Files Created**: You now have {len(successful_files)} individual presentation files.
+            
+            **To combine them manually:**
+            1. Open the first presentation in PowerPoint
+            2. Use "Insert → Slides from Other Presentation" to add slides from other files
+            3. Arrange slides as needed
+            
+            **Why separate files?** This preserves all formatting, themes, and layouts perfectly.
+            """)
+    
+    # Show failed files if any
+    failed_files = [f for f in processing_result["individual_files"] if not f["processing_successful"]]
+    if failed_files:
+        st.error("❌ **Some files failed to process:**")
+        for file_info in failed_files:
+            st.error(f"• {file_info['original_name']}: {file_info.get('error', 'Unknown error')}")
 
 def render_session_info():
     """Render session information and logs in sidebar."""
