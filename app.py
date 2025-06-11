@@ -919,18 +919,17 @@ def create_trimmed_template(source_file_path: str, slides_to_keep: List[int],
     
     return result
 
-def merge_templates_advanced(template_results: List[Dict], output_dir: Path) -> Dict:
-    """Merge multiple trimmed templates into final presentation."""
+def create_individual_template_files(template_results: List[Dict], output_dir: Path) -> Dict:
+    """Create individual template files for download instead of merging."""
     logger = st.session_state.logger
     
-    # Initialize merge result
-    merge_result = {
+    # Initialize result
+    processing_result = {
         "success": False,
-        "final_file_path": None,
         "total_templates": len(template_results),
         "successful_templates": 0,
+        "individual_files": [],
         "total_slides": 0,
-        "merge_method": "unknown",
         "processing_time": 0,
         "error": None,
         "timestamp": datetime.datetime.now().isoformat()
@@ -941,85 +940,96 @@ def merge_templates_advanced(template_results: List[Dict], output_dir: Path) -> 
     try:
         # Filter successful templates
         successful_templates = [r for r in template_results if r["success"] and r["template_path"]]
-        merge_result["successful_templates"] = len(successful_templates)
+        processing_result["successful_templates"] = len(successful_templates)
         
         if not successful_templates:
-            merge_result["error"] = "No successful templates to merge"
-            logger.error("No successful templates available for merging")
-            return merge_result
+            processing_result["error"] = "No successful templates to process"
+            logger.error("No successful templates available")
+            return processing_result
         
-        # Generate final output filename
+        logger.info(f"Creating {len(successful_templates)} individual template files...")
+        
+        # Generate timestamp for consistent naming
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        final_file = output_dir / f"assembled_presentation_{timestamp}.pptx"
         
-        logger.info(f"Merging {len(successful_templates)} templates into: {final_file.name}")
+        # Process each successful template
+        for i, template_result in enumerate(successful_templates):
+            try:
+                source_path = template_result["template_path"]
+                source_file_name = template_result["source_file"]
+                
+                # Generate clean filename
+                base_name = os.path.splitext(source_file_name)[0]
+                # Remove any problematic characters
+                clean_name = re.sub(r'[^\w\-_\.]', '_', base_name)
+                final_filename = f"{clean_name}_assembled_{timestamp}.pptx"
+                final_file_path = output_dir / final_filename
+                
+                # Copy template to final location with proper name
+                shutil.copy2(source_path, final_file_path)
+                
+                # Verify file and get slide count
+                final_presentation = Presentation(str(final_file_path))
+                slide_count = len(final_presentation.slides)
+                file_size = final_file_path.stat().st_size
+                
+                # Add to results
+                file_info = {
+                    "original_name": source_file_name,
+                    "final_filename": final_filename,
+                    "file_path": str(final_file_path),
+                    "slide_count": slide_count,
+                    "file_size_mb": file_size / (1024 * 1024),
+                    "slides_kept": template_result["slides_requested"].copy(),
+                    "processing_successful": True
+                }
+                
+                processing_result["individual_files"].append(file_info)
+                processing_result["total_slides"] += slide_count
+                
+                logger.info(f"✅ Created: {final_filename} ({slide_count} slides, {file_size/1024/1024:.1f}MB)")
+                
+            except Exception as file_error:
+                logger.error(f"❌ Error processing template {i+1}: {file_error}")
+                
+                # Add failed file info
+                file_info = {
+                    "original_name": template_result.get("source_file", f"Template_{i+1}"),
+                    "final_filename": None,
+                    "file_path": None,
+                    "slide_count": 0,
+                    "file_size_mb": 0,
+                    "slides_kept": template_result.get("slides_requested", []),
+                    "processing_successful": False,
+                    "error": str(file_error)
+                }
+                
+                processing_result["individual_files"].append(file_info)
+                continue
         
-        if len(successful_templates) == 1:
-            # Simple case: Only one template - just copy it as final result
-            template_path = successful_templates[0]["template_path"]
-            shutil.copy2(template_path, final_file)
+        # Check if any files were successfully created
+        successful_files = [f for f in processing_result["individual_files"] if f["processing_successful"]]
+        
+        if successful_files:
+            processing_result["success"] = True
+            processing_result["processing_time"] = time.time() - start_time
             
-            # Get final slide count
-            final_presentation = Presentation(str(final_file))
-            merge_result["total_slides"] = len(final_presentation.slides)
-            merge_result["merge_method"] = "single_template_copy"
-            merge_result["success"] = True
-            
-            logger.info(f"✅ Single template copied as final result")
-            logger.info(f"   Final slides: {merge_result['total_slides']}")
+            logger.info(f"✅ Template processing completed successfully!")
+            logger.info(f"   Files created: {len(successful_files)}")
+            logger.info(f"   Total slides: {processing_result['total_slides']}")
+            logger.info(f"   Processing time: {processing_result['processing_time']:.2f} seconds")
             
         else:
-            # Multiple templates - attempt advanced merging
-            logger.info("Multiple templates detected - attempting advanced merge...")
-            
-            # Use first template as base
-            base_template = successful_templates[0]["template_path"]
-            shutil.copy2(base_template, final_file)
-            logger.debug(f"Using {os.path.basename(base_template)} as base template")
-            
-            base_presentation = Presentation(str(final_file))
-            merge_result["total_slides"] = len(base_presentation.slides)
-            
-            # Log information about other templates
-            logger.warning("⚠️ Multi-template merging has limitations with python-pptx")
-            logger.info("   For optimal results with multiple files:")
-            logger.info("   1. Use individual template files separately")
-            logger.info("   2. Manually combine in PowerPoint")
-            logger.info("   3. Consider VBScript approach for full automation")
-            
-            for i, template_result in enumerate(successful_templates[1:], 2):
-                template_path = template_result["template_path"]
-                template_slides = template_result["final_slide_count"]
-                logger.info(f"   Template {i}: {os.path.basename(template_path)} ({template_slides} slides)")
-            
-            merge_result["merge_method"] = "base_template_only"
-            merge_result["success"] = True
-            
-            logger.warning("⚠️ Only base template included in final output")
-            logger.info("   Additional templates preserved as individual files")
-        
-        # Final verification and file size check
-        if final_file.exists():
-            file_size = final_file.stat().st_size
-            merge_result["final_file_path"] = str(final_file)
-            merge_result["processing_time"] = time.time() - start_time
-            
-            logger.info(f"✅ Final presentation created: {final_file.name}")
-            logger.info(f"   File size: {file_size:,} bytes ({file_size/1024/1024:.1f} MB)")
-            logger.info(f"   Total slides: {merge_result['total_slides']}")
-            logger.info(f"   Processing time: {merge_result['processing_time']:.2f} seconds")
-            
-        else:
-            merge_result["error"] = "Final file was not created successfully"
-            logger.error("❌ Final presentation file was not created")
+            processing_result["error"] = "No template files could be created successfully"
+            logger.error("❌ All template processing failed")
             
     except Exception as critical_error:
-        merge_result["processing_time"] = time.time() - start_time
-        merge_result["error"] = str(critical_error)
-        logger.error(f"❌ Critical error in template merging: {critical_error}")
-        logger.debug(f"Template merging traceback: {traceback.format_exc()}")
+        processing_result["processing_time"] = time.time() - start_time
+        processing_result["error"] = str(critical_error)
+        logger.error(f"❌ Critical error in template processing: {critical_error}")
+        logger.debug(f"Template processing traceback: {traceback.format_exc()}")
     
-    return merge_result
+    return processing_result
 
 # ============================================================================
 # STREAMLIT USER INTERFACE
@@ -1729,6 +1739,16 @@ def render_slide_assembly():
     This proven approach creates perfect copies of your original slides.
     """)
     
+    # Multi-deck limitation disclaimer
+    if len(st.session_state.uploaded_files_info) > 1:
+        st.warning("""
+        **📋 Multi-Deck Notice**: When multiple PowerPoint files are selected, this tool will create **individual assembled files** for each deck rather than combining them into one file.
+        
+        **Why?** Merging multiple PowerPoint files while preserving all formatting, themes, and layouts is complex and can break formatting.
+        
+        **Result**: You'll get separate `.pptx` files that you can manually combine in PowerPoint if needed.
+        """)
+    
     st.markdown("**Assembly Configuration**")
     
     # File and slide selection
@@ -1773,12 +1793,16 @@ def render_slide_assembly():
     # Assembly button
     if assembly_configs:
         total_slides = sum(len(config["parsed_slides"]) for config in assembly_configs)
+        num_files = len(assembly_configs)
         
-        st.info(f"📊 Ready to assemble: {total_slides} slides from {len(assembly_configs)} files")
+        if num_files == 1:
+            st.info(f"📊 Ready to assemble: {total_slides} slides from 1 file → **1 output file**")
+        else:
+            st.info(f"📊 Ready to assemble: {total_slides} slides from {num_files} files → **{num_files} individual output files**")
         
-        if st.button("🚀 Create Assembled Presentation", type="primary"):
+        if st.button("🚀 Create Assembled Presentation(s)", type="primary"):
             
-            with st.spinner("🔄 Creating assembled presentation using template duplication..."):
+            with st.spinner("🔄 Creating assembled presentations using template duplication..."):
                 
                 # Create output directory
                 output_dir = Path(OUTPUT_DIR_NAME)
@@ -1808,49 +1832,93 @@ def render_slide_assembly():
                     else:
                         st.error(f"❌ Failed to create template for {file_info['name']}: {template_result.get('error', 'Unknown error')}")
                 
-                # Merge templates
-                st.info("🔗 Merging templates into final presentation...")
+                # Create individual template files
+                st.info("📁 Creating individual presentation files...")
                 
-                merge_result = merge_templates_advanced(template_results, output_dir)
+                processing_result = create_individual_template_files(template_results, output_dir)
                 
-                if merge_result["success"]:
+                if processing_result["success"]:
                     st.success(f"🎉 **Assembly completed successfully!**")
                     
-                    # Display results
-                    col1, col2 = st.columns(2)
+                    # Display overall results
+                    col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        st.metric("Final Slides", merge_result["total_slides"])
-                        st.metric("Processing Time", f"{merge_result['processing_time']:.1f}s")
-                    
+                        st.metric("Files Created", len([f for f in processing_result["individual_files"] if f["processing_successful"]]))
                     with col2:
-                        st.metric("Templates Merged", merge_result["successful_templates"])
-                        st.metric("Merge Method", merge_result["merge_method"])
+                        st.metric("Total Slides", processing_result["total_slides"])
+                    with col3:
+                        st.metric("Processing Time", f"{processing_result['processing_time']:.1f}s")
                     
-                    # File download
-                    if merge_result["final_file_path"] and Path(merge_result["final_file_path"]).exists():
-                        final_file_path = Path(merge_result["final_file_path"])
+                    # Display individual file results and download buttons
+                    st.subheader("📥 Download Your Assembled Presentations")
+                    
+                    successful_files = [f for f in processing_result["individual_files"] if f["processing_successful"]]
+                    
+                    if successful_files:
+                        for i, file_info in enumerate(successful_files):
+                            with st.container():
+                                st.markdown(f"### 📄 {file_info['original_name']}")
+                                
+                                col1, col2, col3 = st.columns([2, 1, 1])
+                                
+                                with col1:
+                                    st.markdown(f"**Output:** `{file_info['final_filename']}`")
+                                    st.caption(f"Slides included: {', '.join(map(str, file_info['slides_kept']))}")
+                                
+                                with col2:
+                                    st.metric("Slides", file_info['slide_count'])
+                                    st.metric("Size", f"{file_info['file_size_mb']:.1f} MB")
+                                
+                                with col3:
+                                    # Download button for this file
+                                    file_path = Path(file_info['file_path'])
+                                    if file_path.exists():
+                                        with open(file_path, "rb") as file:
+                                            st.download_button(
+                                                label=f"📥 Download",
+                                                data=file.read(),
+                                                file_name=file_info['final_filename'],
+                                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                                type="primary",
+                                                key=f"download_{i}",
+                                                use_container_width=True
+                                            )
+                                        
+                                        st.caption(f"📁 Saved: `{file_path.absolute()}`")
+                                
+                                if i < len(successful_files) - 1:
+                                    st.divider()
                         
-                        with open(final_file_path, "rb") as file:
-                            st.download_button(
-                                label="📥 Download Assembled Presentation",
-                                data=file.read(),
-                                file_name=final_file_path.name,
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                type="primary"
-                            )
-                        
-                        st.info(f"📁 **File saved to:** `{final_file_path.absolute()}`")
+                        # Summary message
+                        if len(successful_files) > 1:
+                            st.info(f"""
+                            **📋 Multiple Files Created**: You now have {len(successful_files)} individual presentation files.
+                            
+                            **To combine them manually:**
+                            1. Open the first presentation in PowerPoint
+                            2. Use "Insert → Slides from Other Presentation" to add slides from other files
+                            3. Arrange slides as needed
+                            
+                            **Why separate files?** This preserves all formatting, themes, and layouts perfectly.
+                            """)
+                    
+                    # Show failed files if any
+                    failed_files = [f for f in processing_result["individual_files"] if not f["processing_successful"]]
+                    if failed_files:
+                        st.error("❌ **Some files failed to process:**")
+                        for file_info in failed_files:
+                            st.error(f"• {file_info['original_name']}: {file_info.get('error', 'Unknown error')}")
                     
                     # Store results
                     st.session_state.processing_results = {
                         "template_results": template_results,
-                        "merge_result": merge_result,
+                        "processing_result": processing_result,
                         "timestamp": datetime.datetime.now().isoformat()
                     }
                     
                 else:
-                    st.error(f"❌ Assembly failed: {merge_result.get('error', 'Unknown error')}")
+                    st.error(f"❌ Assembly failed: {processing_result.get('error', 'Unknown error')}")
     else:
         st.info("👆 Configure slide ranges for your files to enable assembly.")
 
@@ -1888,9 +1956,11 @@ def render_session_info():
         # Processing results summary
         if st.session_state.processing_results:
             st.subheader("Assembly Results")
-            merge_result = st.session_state.processing_results.get("merge_result", {})
-            if merge_result.get("success"):
-                st.success(f"✅ {merge_result.get('total_slides', 0)} slides")
+            processing_result = st.session_state.processing_results.get("processing_result", {})
+            if processing_result.get("success"):
+                successful_files = len([f for f in processing_result.get("individual_files", []) if f.get("processing_successful", False)])
+                total_slides = processing_result.get("total_slides", 0)
+                st.success(f"✅ {successful_files} files, {total_slides} slides")
             else:
                 st.error("❌ Assembly failed")
         
